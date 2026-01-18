@@ -1,0 +1,306 @@
+
+!pip install rdkit
+
+
+import pandas as pd
+import warnings
+
+
+warnings.filterwarnings('ignore')
+
+url = "https://deepchemdata.s3-us-west-1.amazonaws.com/datasets/qm9.csv"
+
+print("Downloading and loading QM9 dataset... (This may take a moment)")
+
+df_raw = pd.read_csv(url)
+
+
+df = df_raw[['mol_id', 'smiles', 'gap']].copy()
+
+print(f"Dataset loaded. Total molecules: {df.shape[0]}")
+print("First 10 rows:")
+display(df.head(10))
+
+
+SAMPLE_SIZE = 20000
+
+if SAMPLE_SIZE < len(df):
+    df_sample = df.sample(n=SAMPLE_SIZE, random_state=42).copy()
+else:
+    df_sample = df.copy()
+
+df_sample.reset_index(drop=True, inplace=True)
+
+print(f"Working dataset shape: {df_sample.shape}")
+
+from sklearn.model_selection import train_test_split
+
+X_raw = df_sample['smiles'].values
+y = df_sample['gap'].values
+
+
+X_train_smiles, X_test_smiles, y_train, y_test = train_test_split(
+    X_raw, y, test_size=0.2, random_state=42
+)
+
+print(f"Training set size: {len(X_train_smiles)} molecules")
+print(f"Test set size:     {len(X_test_smiles)} molecules")
+
+import numpy as np
+from rdkit import Chem
+from rdkit.Chem import rdFingerprintGenerator
+from rdkit.Chem import DataStructs
+
+def smiles_to_vector(smiles, radius=2, n_bits=1024):
+
+    mol = Chem.MolFromSmiles(smiles)
+    if mol is None:
+        return None
+
+    mfgen = rdFingerprintGenerator.GetMorganGenerator(radius=radius, fpSize=n_bits)
+
+    fp = mfgen.GetFingerprint(mol)
+
+    arr = np.zeros((0,), dtype=np.int8)
+    DataStructs.ConvertToNumpyArray(fp, arr)
+
+    return arr
+
+
+
+
+X_train_list = []
+
+
+for s in X_train_smiles:
+
+    vec = smiles_to_vector(s)
+
+    X_train_list.append(vec)
+
+
+X_train = np.array(X_train_list)
+
+
+
+
+X_test_list = []
+
+
+
+for s in X_test_smiles:
+    vec = smiles_to_vector(s)
+    X_test_list.append(vec)
+
+X_test = np.array(X_test_list)
+
+
+print("Featurization Completed!")
+print(f"X_train shape: {X_train.shape}")
+print(f"X_test shape:  {X_test.shape}")
+
+
+#RF
+
+from sklearn.ensemble import RandomForestRegressor
+
+
+rf_model = RandomForestRegressor(n_estimators=100, random_state=42)
+rf_model.fit(X_train, y_train)
+
+print("Random Forest Model Training Completed.")
+
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+
+sns.set(style='whitegrid')
+
+
+y_pred_rf = rf_model.predict(X_test)
+
+mae_rf = mean_absolute_error(y_test, y_pred_rf)
+rmse_rf = np.sqrt(mean_squared_error(y_test, y_pred_rf))
+r2_rf = r2_score(y_test, y_pred_rf)
+
+
+print(f"Random Forest Results:")
+print(f"MAE:  {mae_rf:.5f} Hartree")
+print(f"RMSE: {rmse_rf:.5f} Hartree")
+print(f"R2 Score: {r2_rf:.4f}")
+
+
+plt.figure(figsize=(8, 8))
+
+sns.scatterplot(x=y_test, y=y_pred_rf, alpha=0.6, color='blue')
+
+min_val = min(y_test.min(), y_pred_rf.min())
+max_val = max(y_test.max(), y_pred_rf.max())
+plt.plot([min_val, max_val], [min_val, max_val], color='red', linestyle='--', linewidth=2)
+
+plt.title(f'Random Forest: Predicted vs Actual Gap ($R^2$={r2_rf:.3f})', fontsize=14)
+plt.xlabel('Actual HOMO-LUMO Gap (Hartree)', fontsize=12)
+plt.ylabel('Predicted Gap (Hartree)', fontsize=12)
+
+plt.show()
+
+#ANN
+from sklearn.neural_network import MLPRegressor
+
+ann_model = MLPRegressor(
+    hidden_layer_sizes=(128, 64),
+    activation='relu',
+    solver='adam',
+    alpha=0.0001,
+    batch_size=64,
+    learning_rate_init=0.001,
+    max_iter=200,
+    early_stopping=True,
+    validation_fraction=0.1,
+    random_state=42,
+    verbose=True
+)
+
+ann_model.fit(X_train, y_train)
+
+print("ANN model Training Completed.")
+
+
+y_pred_ann = ann_model.predict(X_test)
+
+
+mae_ann = mean_absolute_error(y_test, y_pred_ann)
+rmse_ann = np.sqrt(mean_squared_error(y_test, y_pred_ann))
+r2_ann = r2_score(y_test, y_pred_ann)
+
+
+print(f"Neural Network (ANN) Final Results:")
+print(f"MAE:  {mae_ann:.5f} Hartree")
+print(f"RMSE: {rmse_ann:.5f} Hartree")
+print(f"R2 Score: {r2_ann:.4f}")
+
+
+
+plt.figure(figsize=(8, 8))
+sns.scatterplot(x=y_test, y=y_pred_ann, alpha=0.6, color='green', s=20)
+
+min_val = min(y_test.min(), y_pred_ann.min())
+max_val = max(y_test.max(), y_pred_ann.max())
+plt.plot([min_val, max_val], [min_val, max_val], color='red', linestyle='--', linewidth=2)
+
+plt.title(f'Neural Network: Predicted vs Actual ($R^2$={r2_ann:.3f})', fontsize=14)
+plt.xlabel('Actual Gap (Hartree)')
+plt.ylabel('Predicted Gap (Hartree)')
+plt.show()
+
+#KRR
+from sklearn.kernel_ridge import KernelRidge
+
+
+
+krr_model = KernelRidge(kernel='rbf', alpha=0.1, gamma=0.01)
+
+krr_model.fit(X_train, y_train)
+print("KRR model Training Completed.")
+
+
+
+y_pred_krr = krr_model.predict(X_test)
+
+
+mae_krr = mean_absolute_error(y_test, y_pred_krr)
+rmse_krr = np.sqrt(mean_squared_error(y_test, y_pred_krr))
+r2_krr = r2_score(y_test, y_pred_krr)
+
+
+print(f"KRR Results")
+print(f"MAE:  {mae_krr:.5f} Hartree")
+print(f"RMSE: {rmse_krr:.5f} Hartree")
+print(f"R2 Score: {r2_krr:.4f}")
+
+
+plt.figure(figsize=(8, 8))
+
+sns.scatterplot(x=y_test, y=y_pred_rf, alpha=0.6, color='pink')
+
+
+min_val = min(y_test.min(), y_pred_krr.min())
+max_val = max(y_test.max(), y_pred_krr.max())
+plt.plot([min_val, max_val], [min_val, max_val], color='red', linestyle='--', linewidth=2)
+
+plt.title(f'KRR: Predicted vs Actual Gap ($R^2$={r2_krr:.4f})', fontsize=14)
+plt.xlabel('Actual HOMO-LUMO Gap (Hartree)', fontsize=12)
+plt.ylabel('Predicted Gap (Hartree)', fontsize=12)
+
+plt.show()
+
+
+results_data = {
+    'Model': ['Random Forest', 'Neural Network (ANN)', 'KRR'],
+    'MAE (Hartree)': [0.01126, 0.01240, 0.01327],
+    'RMSE (Hartree)': [0.01640, 0.01717, 0.01791],
+    'R2 Score': [0.8795, 0.8680, 0.8562]
+}
+
+results_df = pd.DataFrame(results_data)
+
+results_df = results_df.sort_values(by='R2 Score', ascending=False)
+
+print("FINAL RESULTS TABLE:")
+display(results_df)
+
+
+plt.figure(figsize=(10, 6))
+
+ax = sns.barplot(x='Model', y='R2 Score', data=results_df, palette='viridis')
+
+plt.title('Final Model Comparison: Predicting HOMO-LUMO Gap', fontsize=16)
+plt.ylabel('$R^2$ Score', fontsize=12)
+plt.xlabel('Model Architecture', fontsize=12)
+plt.ylim(0.80, 0.95)
+
+
+for p in ax.patches:
+    ax.annotate(f'{p.get_height():.4f}',
+                (p.get_x() + p.get_width() / 2., p.get_height()),
+                ha = 'center', va = 'center',
+                xytext = (0, 9),
+                textcoords = 'offset points',
+                fontsize=12, fontweight='bold')
+
+plt.tight_layout()
+plt.show()
+
+#casstudy
+molecules_data = {
+    "Aspirin":      {"smiles": "CC(=O)Oc1ccccc1C(=O)O", "real": 5.40},
+    "Benzene":      {"smiles": "c1ccccc1",              "real": 6.90},
+    "Methane":      {"smiles": "C",                     "real": 10.81},
+    "Toluene":      {"smiles": "Cc1ccccc1",             "real": 6.70},
+    "Phenol":       {"smiles": "Oc1ccccc1",             "real": 6.15},
+    "Aniline":      {"smiles": "Nc1ccccc1",             "real": 5.60},
+    "Ethylbenzene": {"smiles": "CCc1ccccc1",            "real": 6.70},
+    "Acetaminophene": {"smiles": "CC(=O)NC1=CC=C(C=C1)O", "real": 5},
+        "caffeine":       {"smiles": "CN1C=NC2=C1C(=O)N(C(=O)N2C)C",    "real": 5.3}
+
+}
+
+print(f"{'Molecule':<15} | {'Real (eV)':<10} | {'RF (eV)':<10} | {'ANN (eV)':<10} | {'KRR (eV)':<10}")
+print("-" * 75)
+
+for name, data in molecules_data.items():
+    smiles = data['smiles']
+    real_ev = data['real']
+
+    fp = smiles_to_vector(smiles)
+    if fp is None:
+        continue
+
+
+    fp_reshaped = fp.reshape(1, -1)
+
+    pred_rf = rf_model.predict(fp_reshaped)[0] * 27.2114
+    pred_ann = ann_model.predict(fp_reshaped)[0] * 27.2114
+    pred_krr = krr_model.predict(fp_reshaped)[0] * 27.2114
+
+    print(f"{name:<15} | {real_ev:<10.4f} | {pred_rf:<10.4f} | {pred_ann:<10.4f} | {pred_krr:<10.4f}")
